@@ -1,0 +1,112 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>MediStock - Login</title>
+  <link rel="stylesheet" href="css/style.css">
+</head>
+<body>
+  <header><a class="logo" href="index.html">MediStock</a></header>
+  <main class="login-wrap">
+    <div class="card">
+      <h2 class="center" style="margin-bottom:14px">Welcome to MediStock</h2>
+      <div class="switch">
+        <button id="tab-login" class="active">Login</button>
+        <button id="tab-register">New patient? Register</button>
+      </div>
+
+      <form id="login-form">
+        <label>Email <input id="l-email" type="email" required></label>
+        <label>Password <input id="l-password" type="password" required></label>
+        <button style="width:100%">Login</button>
+      </form>
+
+      <form id="register-form" hidden>
+        <label>Full name <input id="r-name" required></label>
+        <label>Phone <input id="r-phone"></label>
+        <label>Email <input id="r-email" type="email" required></label>
+        <label>Password <input id="r-password" type="password" required></label>
+        <button style="width:100%">Create account</button>
+      </form>
+
+      <p id="message" class="error"></p>
+
+      <div class="demo">
+        <p class="muted">Demo logins (password pass123) - tap to fill:</p>
+        <button type="button" class="small light" data-email="pharmacist@medistock.com">Pharmacist</button>
+        <button type="button" class="small light" data-email="cashier@medistock.com">Cashier</button>
+        <button type="button" class="small light" data-email="patient@medistock.com">Patient</button>
+        <button type="button" class="small light" data-email="admin@medistock.com">Admin</button>
+      </div>
+    </div>
+  </main>
+
+  <script src="js/api.js"></script>
+  <script>
+    const loginForm = document.getElementById('login-form');
+    const registerForm = document.getElementById('register-form');
+    const message = document.getElementById('message');
+    const tabLogin = document.getElementById('tab-login');
+    const tabRegister = document.getElementById('tab-register');
+
+    function showTab(isLogin) {
+      loginForm.hidden = !isLogin;
+      registerForm.hidden = isLogin;
+      tabLogin.className = isLogin ? 'active' : '';
+      tabRegister.className = isLogin ? '' : 'active';
+      message.textContent = '';
+    }
+    tabLogin.onclick = function () { showTab(true); };
+    tabRegister.onclick = function () { showTab(false); };
+
+    // Demo buttons fill in the login form
+    document.querySelectorAll('.demo button').forEach(function (b) {
+      b.onclick = function () {
+        showTab(true);
+        toast('Demo login filled - press Login');
+        document.getElementById('l-email').value = b.dataset.email;
+        document.getElementById('l-password').value = 'pass123';
+      };
+    });
+
+    // Save the login and go to the right page
+    function finish(data) {
+      localStorage.setItem('token', data.token);
+      localStorage.setItem('user', JSON.stringify(data.user));
+      const page = data.user.role === 'patient' ? 'pages/patient-dashboard.html' : 'pages/staff.html';
+      popup({ type: 'success', title: 'Welcome, ' + data.user.name + '!', message: 'Taking you to your dashboard...', okText: 'Continue' })
+        .then(function () { location.href = page; });
+      setTimeout(function () { location.href = page; }, 1500);
+    }
+
+    loginForm.onsubmit = async function (e) {
+      e.preventDefault();
+      try {
+        const data = await api('auth/login', 'POST', {
+          email: document.getElementById('l-email').value,
+          password: document.getElementById('l-password').value
+        });
+        finish(data);
+      } catch (err) {
+        showError(err.message, 'Login failed');
+      }
+    };
+
+    registerForm.onsubmit = async function (e) {
+      e.preventDefault();
+      try {
+        const data = await api('auth/register', 'POST', {
+          name: document.getElementById('r-name').value,
+          phone: document.getElementById('r-phone').value,
+          email: document.getElementById('r-email').value,
+          password: document.getElementById('r-password').value
+        });
+        finish(data);
+      } catch (err) {
+        showError(err.message, 'Could not register');
+      }
+    };
+  </script>
+</body>
+</html>

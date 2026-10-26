@@ -1,0 +1,342 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>MediStock - Staff</title>
+  <link rel="stylesheet" href="../css/style.css">
+</head>
+<body>
+  <header>
+    <a class="logo" href="../index.html">MediStock</a>
+    <span><span id="who"></span> <button class="light" id="logout-btn">Log out</button></span>
+  </header>
+
+  <main>
+    <div class="stats">
+      <div class="stat"><b id="st-med">0</b><span>Medicines</span></div>
+      <div class="stat"><b id="st-low">0</b><span>Low stock</span></div>
+      <div class="stat"><b id="st-exp">0</b><span>Expiring / expired batches</span></div>
+      <div class="stat"><b id="st-ord">0</b><span>Online orders</span></div>
+    </div>
+
+    <div class="tabs" id="tabs">
+      <button data-tab="sell" class="active">Sell</button>
+      <button data-tab="stock">Stock and alerts</button>
+      <button data-tab="orders">Online orders</button>
+      <button data-tab="people" data-manage>Patients</button>
+    </div>
+
+    <!-- SELL -->
+    <div class="panel" id="tab-sell">
+      <div class="card">
+        <h2>Sell medicine</h2>
+        <div class="form-grid">
+          <label>Patient (leave as walk-in for no dashboard)
+            <select id="s-patient"></select></label>
+          <label>Doctor name <input id="s-doctor" placeholder="Dr. Rao"></label>
+          <label>Hospital name <input id="s-hospital" placeholder="City Hospital"></label>
+        </div>
+
+        <div id="tablets"></div>
+        <div class="row">
+          <button type="button" class="light" id="add-tablet">+ Add another tablet</button>
+          <button id="sell">Sell</button>
+        </div>
+        
+      </div>
+    </div>
+
+    <!-- STOCK -->
+    <div class="panel" id="tab-stock" hidden>
+      <div class="card"><h2>Stock</h2><div class="table-wrap" id="stock"></div></div>
+      <div class="card" data-manage><h2>Alerts</h2><div class="table-wrap" id="alerts"></div></div>
+      <div class="form-grid" data-manage>
+        <div class="card">
+          <h2>Add medicine</h2>
+          <label>Name <input id="m-name"></label>
+          <label>Price <input id="m-price" type="number" step="0.01"></label>
+          <label>Reorder level <input id="m-level" type="number" value="20"></label>
+          <button id="add-med">Add medicine</button>
+        </div>
+        <div class="card">
+          <h2>Add stock batch</h2>
+          <label>Medicine <select id="b-medicine"></select></label>
+          <label>Batch number <input id="b-no"></label>
+          <label>Expiry date <input id="b-expiry" type="date"></label>
+          <label>Quantity <input id="b-qty" type="number"></label>
+          <button id="add-batch">Add batch</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- ORDERS -->
+    <div class="panel" id="tab-orders" hidden>
+      <h2>Online orders</h2>
+      <div id="orders"></div>
+    </div>
+
+    <!-- PATIENTS -->
+    <div class="panel" id="tab-people" hidden data-manage>
+      <div class="card">
+        <h2>Add patient</h2>
+        <div class="form-grid">
+          <label>Full name <input id="p-name"></label>
+          <label>Email (the patient logs in with this) <input id="p-email" type="email"></label>
+          <label>Phone <input id="p-phone"></label>
+          <label>Password (leave empty to make one automatically) <input id="p-password"></label>
+        </div>
+        <button id="add-patient">Add patient</button>
+        
+      </div>
+    </div>
+  </main>
+
+  <script src="../js/api.js"></script>
+  <script>
+    const me = requireRole(['admin', 'pharmacist', 'cashier']);
+    document.getElementById('who').textContent = me.name + ' (' + me.role + ')';
+
+    document.getElementById('logout-btn').onclick = async function () {
+      if (await askConfirm('Do you want to log out?', 'Log out')) logout();
+    };
+
+    // Cashiers can only sell and see stock/orders
+    const canManage = me.role !== 'cashier';
+    if (!canManage) {
+      document.querySelectorAll('[data-manage]').forEach(function (el) { el.remove(); });
+    }
+
+    let medOptions = '';
+
+    function value(id) { return document.getElementById(id).value; }
+    function say(id, text, isError) {
+      const el = document.getElementById(id);
+      el.className = isError ? 'error' : 'ok';
+      el.textContent = text;
+    }
+
+    // ----- Tabs -----
+    document.querySelectorAll('#tabs button').forEach(function (b) {
+      b.onclick = function () {
+        document.querySelectorAll('#tabs button').forEach(function (x) { x.classList.remove('active'); });
+        document.querySelectorAll('.panel').forEach(function (p) { p.hidden = true; });
+        b.classList.add('active');
+        document.getElementById('tab-' + b.dataset.tab).hidden = false;
+      };
+    });
+
+    // ----- Tables -----
+    function table(title, rows, columns) {
+      const head = title ? '<h3>' + title + '</h3>' : '';
+      if (rows.length === 0) return head + '<p class="muted">None.</p>';
+      let html = head + '<table><tr>';
+      for (const c of columns) html += '<th>' + c.replace('_', ' ') + '</th>';
+      html += '</tr>';
+      for (const r of rows) {
+        html += '<tr>';
+        for (const c of columns) html += '<td>' + esc(r[c] ?? '') + '</td>';
+        html += '</tr>';
+      }
+      return html + '</table>';
+    }
+
+    function stockTable(medicines) {
+      let html = '<table><tr><th>Name</th><th>Price</th><th>Stock</th><th>Reorder level</th><th>Status</th></tr>';
+      for (const m of medicines) {
+        const badge = m.stock === 0 ? '<span class="badge bad">Out of stock</span>'
+          : m.stock <= m.reorder_level ? '<span class="badge warn">Low</span>'
+          : '<span class="badge ok">Good</span>';
+        html += '<tr><td>' + esc(m.name) + '</td><td>Rs ' + m.price + '</td><td>' + m.stock +
+          '</td><td>' + m.reorder_level + '</td><td>' + badge + '</td></tr>';
+      }
+      return html + '</table>';
+    }
+
+    // ----- Load everything -----
+    async function loadAll() {
+      const medicines = await api('medicines');
+      const patients = await api('auth/patients');
+
+      let options = '';
+      for (const m of medicines) options += '<option value="' + m.id + '">' + esc(m.name) + ' (stock ' + m.stock + ')</option>';
+      medOptions = options;
+      document.querySelectorAll('#tablets .t-medicine').forEach(function (sel) {
+        const keep = sel.value;
+        sel.innerHTML = options;
+        sel.value = keep;
+      });
+      if (!document.querySelector('#tablets .tablet-box')) addTablet();
+      if (canManage) document.getElementById('b-medicine').innerHTML = options;
+
+      let patientOptions = '<option value="">Walk-in customer</option>';
+      for (const p of patients) patientOptions += '<option value="' + p.id + '">' + esc(p.name) + ' - ' + esc(p.email) + '</option>';
+      document.getElementById('s-patient').innerHTML = patientOptions;
+
+      document.getElementById('stock').innerHTML = stockTable(medicines);
+      document.getElementById('st-med').textContent = medicines.length;
+      document.getElementById('st-low').textContent = medicines.filter(function (m) { return m.stock <= m.reorder_level; }).length;
+
+      if (canManage) {
+        const a = await api('medicines/alerts');
+        document.getElementById('alerts').innerHTML =
+          table('Low stock', a.lowStock, ['name', 'stock', 'reorder_level']) +
+          table('Expiring within 90 days', a.expiring, ['name', 'batch_no', 'expiry_date', 'qty']) +
+          table('Already expired', a.expired, ['name', 'batch_no', 'expiry_date', 'qty']);
+        document.getElementById('st-exp').textContent = a.expiring.length + a.expired.length;
+        const n = a.lowStock.length + a.expiring.length + a.expired.length;
+        if (n > 0 && !sessionStorage.getItem('alerted')) {
+          sessionStorage.setItem('alerted', '1');
+          showWarn(a.lowStock.length + ' low stock, ' + a.expiring.length + ' expiring soon, ' + a.expired.length + ' expired.\nOpen "Stock and alerts" to see them.', 'Stock alerts');
+        }
+      } else {
+        document.getElementById('st-exp').textContent = '-';
+      }
+
+      await loadOrders();
+    }
+
+    const STATUSES = ['Placed', 'Confirmed', 'Out for delivery', 'Delivered'];
+    async function loadOrders() {
+      const orders = await api('orders');
+      document.getElementById('st-ord').textContent = orders.length;
+      let html = '';
+      for (const o of orders) {
+        let lines = '';
+        for (const l of o.lines) {
+          lines += '<tr><td>' + esc(l.name) + '</td><td>' + l.qty + '</td><td>Rs ' + l.total + '</td></tr>';
+        }
+        let options = '';
+        for (const st of STATUSES) options += '<option' + (st === o.status ? ' selected' : '') + '>' + st + '</option>';
+        const actions = canManage
+          ? '<div class="order-actions"><select id="st-' + o.id + '">' + options + '</select>' +
+            '<button class="small" onclick="changeStatus(' + o.id + ')">Update status</button></div>'
+          : '';
+        html += '<div class="card order"><div class="order-head"><b>Order #' + o.id + ' - ' + esc(o.name) + '</b>' +
+          '<span class="badge ' + (o.status === 'Delivered' ? 'ok' : 'info') + '">' + esc(o.status) + '</span></div>' +
+          '<p class="muted">' + esc(o.created_at) + ' &middot; Phone ' + esc(o.phone) + '</p>' +
+          '<p class="ship">' + esc(o.address) + ', ' + esc(o.city) + ' - ' + esc(o.pincode) + '</p>' +
+          '<table><tr><th>Medicine</th><th>Qty</th><th>Price</th></tr>' + lines + '</table>' +
+          '<div class="total-line"><span>Total</span><span>Rs ' + o.total + '</span></div>' + actions + '</div>';
+      }
+      document.getElementById('orders').innerHTML = html || '<p class="muted">No online orders yet.</p>';
+    }
+
+    async function changeStatus(id) {
+      try {
+        const result = await api('orders/' + id + '/status', 'PATCH', { status: value('st-' + id) });
+        toast(result.message);
+        loadOrders();
+      } catch (err) {
+        showError(err.message);
+      }
+    }
+
+    // ----- Tablets in the sell form (add as many as you like) -----
+    function addTablet() {
+      const box = document.createElement('div');
+      box.className = 'tablet-box';
+      const first = document.querySelectorAll('#tablets .tablet-box').length === 0;
+      box.innerHTML =
+        '<div class="tablet-head"><h3 class="t-title"></h3>' +
+        (first ? '' : '<button type="button" class="small danger t-remove">Remove</button>') + '</div>' +
+        '<div class="form-grid">' +
+        '<label>Medicine <select class="t-medicine">' + medOptions + '</select></label>' +
+        '<label>Quantity <input class="t-qty" type="number" min="1" value="1"></label>' +
+        '<label>Dose <input class="t-dose" placeholder="1 tablet"></label>' +
+        '<label>Times <input class="t-times" placeholder="08:00,14:00,21:00"></label>' +
+        '<label>Number of days <input class="t-days" type="number" min="1" value="3"></label>' +
+        '<label>Food <select class="t-food"><option>any time</option><option>before food</option>' +
+        '<option>after food</option><option>with food</option></select></label></div>' +
+        '<label>Instructions <input class="t-notes" placeholder="Finish the full course"></label>';
+      document.getElementById('tablets').appendChild(box);
+      const remove = box.querySelector('.t-remove');
+      if (remove) remove.onclick = function () { box.remove(); numberTablets(); };
+      numberTablets();
+      return box;
+    }
+    function numberTablets() {
+      document.querySelectorAll('#tablets .tablet-box').forEach(function (b, i) {
+        b.querySelector('.t-title').textContent = 'Tablet ' + (i + 1);
+      });
+    }
+    document.getElementById('add-tablet').onclick = function () {
+      addTablet().scrollIntoView({ behavior: 'smooth', block: 'center' });
+    };
+
+    // ----- Sell -----
+    document.getElementById('sell').onclick = async function () {
+      const items = [];
+      document.querySelectorAll('#tablets .tablet-box').forEach(function (b) {
+        function f(c) { return b.querySelector(c).value; }
+        items.push({ medicine_id: f('.t-medicine'), qty: f('.t-qty'), dose: f('.t-dose'),
+          times: f('.t-times'), days: f('.t-days'), food: f('.t-food'), notes: f('.t-notes') });
+      });
+
+      try {
+        const result = await api('billing', 'POST', {
+          patient_id: value('s-patient'),
+          doctor: value('s-doctor'),
+          hospital: value('s-hospital'),
+          items: items
+        });
+        showSuccess(result.message, 'Sale saved');
+        document.getElementById('tablets').innerHTML = '';
+        addTablet();
+        loadAll();
+      } catch (err) {
+        showError(err.message, 'Sale failed');
+      }
+    };
+
+    if (canManage) {
+      // ----- Add patient -----
+      document.getElementById('add-patient').onclick = async function () {
+        try {
+          const result = await api('auth/patients', 'POST', {
+            name: value('p-name'), email: value('p-email'),
+            phone: value('p-phone'), password: value('p-password')
+          });
+          showSuccess(result.message, 'Patient added');
+          loadAll();
+        } catch (err) {
+          showError(err.message, 'Could not add patient');
+        }
+      };
+
+      // ----- Add medicine -----
+      document.getElementById('add-med').onclick = async function () {
+        try {
+          const result = await api('medicines', 'POST', {
+            name: value('m-name'), price: value('m-price'), reorder_level: value('m-level')
+          });
+          showSuccess(result.message, 'Medicine added');
+          document.getElementById('m-name').value = '';
+          document.getElementById('m-price').value = '';
+          loadAll();
+        } catch (err) {
+          showError(err.message);
+        }
+      };
+
+      // ----- Add batch -----
+      document.getElementById('add-batch').onclick = async function () {
+        try {
+          const result = await api('medicines/batches', 'POST', {
+            medicine_id: value('b-medicine'), batch_no: value('b-no'),
+            expiry_date: value('b-expiry'), qty: value('b-qty')
+          });
+          showSuccess(result.message, 'Batch added');
+          document.getElementById('b-no').value = '';
+          document.getElementById('b-qty').value = '';
+          loadAll();
+        } catch (err) {
+          showError(err.message);
+        }
+      };
+    }
+
+    loadAll();
+  </script>
+</body>
+</html>

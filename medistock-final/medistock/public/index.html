@@ -1,0 +1,266 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>MediStock - Your pharmacy, your schedule</title>
+  <link rel="stylesheet" href="css/style.css">
+</head>
+<body>
+  <header>
+    <a class="logo" href="index.html">MediStock</a>
+    <span>
+      <button class="light" id="cart-btn">Cart <span class="badge-count" id="cart-count">0</span></button>
+      <button id="login-btn">Login</button>
+    </span>
+  </header>
+
+  <section class="hero">
+    <div class="bubble b1"></div><div class="bubble b2"></div>
+    <div class="hero-inner">
+      <div>
+        <h1>Order medicines. <em>Never miss a dose.</em></h1>
+        <p class="lead">Buy from your trusted pharmacy and get tablet timings, food instructions and reminders on your own dashboard.</p>
+        <div class="search-box"><input id="search" placeholder="Search paracetamol, vitamin, syrup..."></div>
+        <div class="hero-actions">
+          <button onclick="document.getElementById('shop').scrollIntoView()">Shop medicines</button>
+          <button class="btn-ghost" id="hero-dash">My dose schedule</button>
+        </div>
+      </div>
+      <div class="visual">
+        <div class="hero-pill hp1"></div><div class="hero-pill hp2"></div>
+        <div class="float-card fc1"><b id="h-count">--</b><span>medicines available</span></div>
+        <div class="float-card fc2"><b>08:00</b><span>Next dose reminder</span></div>
+        <div class="float-card fc3"><b>FEFO</b><span>Earliest expiry sold first</span></div>
+      </div>
+    </div>
+  </section>
+
+  <div class="features">
+    <div class="feature"><div class="ico">&#128138;</div><div><b>Fresh stock only</b><span>Expired batches are never sold</span></div></div>
+    <div class="feature"><div class="ico">&#9200;</div><div><b>Dose reminders</b><span>Timings set by your pharmacist</span></div></div>
+    <div class="feature"><div class="ico">&#128666;</div><div><b>Pay on delivery</b><span>Home delivery or store pickup</span></div></div>
+  </div>
+
+  <main>
+    <div class="section-title"><h2>How it works</h2></div>
+    <div class="steps">
+      <div class="step"><b>Pick your medicines</b><span class="muted">Search and add to your cart.</span></div>
+      <div class="step"><b>Place the order</b><span class="muted">Fill your address, pay at delivery.</span></div>
+      <div class="step"><b>Follow your dashboard</b><span class="muted">See what to take, when, and with food.</span></div>
+    </div>
+
+    <div class="section-title" id="shop">
+      <h2>Medicines</h2>
+      <div class="chips" id="chips">
+        <button class="chip active" data-f="all">All</button>
+        <button class="chip" data-f="stock">In stock</button>
+        <button class="chip" data-f="budget">Under Rs 5</button>
+        <button class="chip" data-f="low">Running low</button>
+      </div>
+    </div>
+    <div id="list" class="grid"></div>
+  </main>
+
+  <footer>MediStock &middot; Always read the label and follow your doctor's advice.</footer>
+
+  <!-- cart drawer -->
+  <div class="drawer-overlay" id="overlay"></div>
+  <aside class="drawer" id="drawer">
+    <div class="drawer-head"><h2>Your cart</h2><button class="light small" id="close-cart">Close</button></div>
+    <div class="table-wrap" id="cart-items"></div>
+    <div id="cart-total"></div>
+
+    <div id="checkout" hidden>
+      <h3>Delivery address</h3>
+      <label>Full name <input id="o-name"></label>
+      <label>Phone (10 digits) <input id="o-phone"></label>
+      <label>Address (house no, street, area) <input id="o-address"></label>
+      <label>City <input id="o-city"></label>
+      <label>Pincode (6 digits) <input id="o-pincode"></label>
+      <button id="place-order" style="width:100%">Place order</button>
+    </div>
+  </aside>
+
+  <script src="js/api.js"></script>
+  <script>
+    let medicines = [];
+    let filter = 'all';
+    // The cart is saved in the browser as { medicineId: quantity }
+    let cart = JSON.parse(localStorage.getItem('cart') || '{}');
+    const user = currentUser();
+    const loginBtn = document.getElementById('login-btn');
+    const dashPage = user && user.role === 'patient' ? 'pages/patient-dashboard.html' : 'pages/staff.html';
+
+    // ----- Login button -----
+    if (user) {
+      loginBtn.textContent = 'My Dashboard';
+      loginBtn.onclick = function () { location.href = dashPage; };
+    } else {
+      loginBtn.onclick = function () { location.href = 'login.html'; };
+    }
+    document.getElementById('hero-dash').onclick = function () {
+      location.href = user ? dashPage : 'login.html';
+    };
+
+    // Fill in name and phone for a logged-in patient
+    if (user && user.role === 'patient') {
+      api('dashboard').then(function (data) {
+        document.getElementById('o-name').value = data.user.name;
+        document.getElementById('o-phone').value = data.user.phone || '';
+      }).catch(function () {});
+    }
+
+    // ----- Medicine list -----
+    function matches(m) {
+      if (filter === 'stock') return m.stock > 0;
+      if (filter === 'budget') return m.price < 5;
+      if (filter === 'low') return m.stock > 0 && m.stock <= m.reorder_level;
+      return true;
+    }
+
+    function showMedicines() {
+      const text = document.getElementById('search').value.toLowerCase();
+      let html = '';
+      for (const m of medicines) {
+        if (!m.name.toLowerCase().includes(text) || !matches(m)) continue;
+        const inStock = m.stock > 0;
+        const low = inStock && m.stock <= m.reorder_level;
+        const status = !inStock ? '<span class="badge bad">Out of stock</span>'
+          : low ? '<span class="badge warn">Only ' + m.stock + ' left</span>'
+          : '<span class="badge ok">In stock</span>';
+        const percent = Math.min(100, Math.round(m.stock / (m.reorder_level * 3) * 100));
+        const button = inStock
+          ? '<button class="small" onclick="addToCart(' + m.id + ')">Add to cart</button>'
+          : '<button class="small" disabled>Add to cart</button>';
+        html += '<div class="card med" style="--h:' + ((m.id * 47) % 360) + '"><span class="pill"></span><b>' + esc(m.name) + '</b>' +
+          '<div style="margin-top:6px">' + status + '</div><div class="stockbar"><i style="width:' + percent + '%"></i></div>' +
+          '<div class="price">Rs ' + m.price + ' <small>/ tablet</small></div>' + button + '</div>';
+      }
+      document.getElementById('list').innerHTML = html || '<p class="muted">No medicines found.</p>';
+    }
+
+    function loadMedicines() {
+      api('medicines').then(function (data) {
+        medicines = data;
+        document.getElementById('h-count').textContent = data.filter(function (m) { return m.stock > 0; }).length + '+';
+        showMedicines();
+        showCart();
+      });
+    }
+
+    document.getElementById('chips').onclick = function (e) {
+      if (!e.target.dataset.f) return;
+      filter = e.target.dataset.f;
+      document.querySelectorAll('.chip').forEach(function (c) { c.classList.toggle('active', c === e.target); });
+      showMedicines();
+    };
+
+    // ----- Cart -----
+    function openCart(open) {
+      document.getElementById('drawer').classList.toggle('open', open);
+      document.getElementById('overlay').classList.toggle('open', open);
+    }
+    document.getElementById('cart-btn').onclick = function () { openCart(true); };
+    document.getElementById('close-cart').onclick = function () { openCart(false); };
+    document.getElementById('overlay').onclick = function () { openCart(false); };
+
+    function saveCart() {
+      localStorage.setItem('cart', JSON.stringify(cart));
+      showCart();
+    }
+
+    function addToCart(id) {
+      const med = medicines.find(function (m) { return m.id === id; });
+      const current = cart[id] || 0;
+      if (current + 1 > med.stock) {
+        showWarn('Only ' + med.stock + ' of ' + med.name + ' in stock.', 'Not enough stock');
+        return;
+      }
+      cart[id] = current + 1;
+      saveCart();
+      toast(med.name + ' added to cart');
+    }
+
+    function changeQty(id, change) {
+      const med = medicines.find(function (m) { return m.id === id; });
+      const newQty = (cart[id] || 0) + change;
+      if (newQty > med.stock) {
+        showWarn('Only ' + med.stock + ' in stock.', 'Not enough stock');
+        return;
+      }
+      if (newQty <= 0) {
+        delete cart[id];
+      } else {
+        cart[id] = newQty;
+      }
+      saveCart();
+    }
+
+    function showCart() {
+      let count = 0;
+      let total = 0;
+      let rows = '';
+
+      for (const id of Object.keys(cart)) {
+        const med = medicines.find(function (m) { return m.id === Number(id); });
+        if (!med) continue; // medicine no longer exists
+        const qty = cart[id];
+        count = count + qty;
+        total = total + qty * med.price;
+        rows += '<tr><td>' + esc(med.name) + '</td>' +
+          '<td><span class="qty"><button class="small light" onclick="changeQty(' + med.id + ', -1)">-</button>' + qty +
+          '<button class="small light" onclick="changeQty(' + med.id + ', 1)">+</button></span></td>' +
+          '<td>Rs ' + (qty * med.price) + '</td></tr>';
+      }
+
+      document.getElementById('cart-count').textContent = count;
+      document.getElementById('cart-items').innerHTML = rows
+        ? '<table><tr><th>Medicine</th><th>Qty</th><th>Price</th></tr>' + rows + '</table>'
+        : '<p class="muted">Your cart is empty. Add some medicines!</p>';
+      document.getElementById('cart-total').innerHTML = rows ? '<div class="total-line"><span>Total</span><span>Rs ' + total + '</span></div>' : '';
+      document.getElementById('checkout').hidden = !rows; // address form shows only when the cart has items
+    }
+
+    // ----- Place order -----
+    document.getElementById('place-order').onclick = async function () {
+      if (!user) {
+        const go = await popup({ type: 'info', title: 'Please log in', message: 'Log in as a patient to place your order. Your cart will be saved.',
+          confirm: true, okText: 'Go to login' });
+        if (go) location.href = 'login.html'; // the cart is saved, so it will still be here after login
+        return;
+      }
+      if (user.role !== 'patient') {
+        showError('Please log in with a patient account to place an order.');
+        return;
+      }
+
+      const items = [];
+      for (const id of Object.keys(cart)) {
+        items.push({ medicine_id: Number(id), qty: cart[id] });
+      }
+
+      try {
+        const result = await api('orders', 'POST', {
+          items: items,
+          name: document.getElementById('o-name').value,
+          phone: document.getElementById('o-phone').value,
+          address: document.getElementById('o-address').value,
+          city: document.getElementById('o-city').value,
+          pincode: document.getElementById('o-pincode').value
+        });
+        cart = {};
+        saveCart();
+        openCart(false);
+        loadMedicines(); // refresh the stock shown
+        showSuccess(result.message, 'Order placed!');
+      } catch (err) {
+        showError(err.message, 'Could not place order');
+      }
+    };
+
+    document.getElementById('search').oninput = showMedicines;
+    loadMedicines();
+  </script>
+</body>
+</html>

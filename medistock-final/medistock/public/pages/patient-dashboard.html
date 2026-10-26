@@ -1,0 +1,199 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>MediStock - My Dashboard</title>
+  <link rel="stylesheet" href="../css/style.css">
+</head>
+<body>
+  <header>
+    <a class="logo" href="../index.html">MediStock</a>
+    <span>
+      <button class="light" onclick="location.href='../index.html'">Shop</button>
+      <button class="light" id="logout-btn">Log out</button>
+    </span>
+  </header>
+
+  <main class="two">
+    <div>
+      <div class="card center">
+        <div class="avatar" id="p-avatar"></div>
+        <h2 id="p-name"></h2>
+        <p id="p-email" class="muted"></p>
+        <p id="p-phone" class="muted"></p>
+      </div>
+      <div class="card">
+        <b>Today's progress</b>
+        <div class="progress"><i id="bar" style="width:0%"></i></div>
+        <span class="muted" id="bar-text"></span>
+      </div>
+    </div>
+
+    <div>
+      <div class="next" id="next"></div>
+      <div class="card">
+        <h2>Tablet timings today</h2>
+        <div class="table-wrap" id="today"></div>
+      </div>
+      <div class="section-title"><h2>My orders</h2></div>
+      <div id="my-orders"></div>
+      <div class="section-title"><h2>Instructions</h2></div>
+      <div id="instructions"></div>
+    </div>
+  </main>
+
+  <script src="../js/api.js"></script>
+  <script>
+    requireRole(['patient']);
+
+    document.getElementById('logout-btn').onclick = async function () {
+      if (await askConfirm('Do you want to log out?', 'Log out')) logout();
+    };
+
+    function pad(n) { return String(n).padStart(2, '0'); }
+    function todayKey() { const d = new Date(); return d.getFullYear() + '-' + pad(d.getMonth() + 1) + '-' + pad(d.getDate()); }
+
+    let schedules = [];
+    const reminded = {}; // doses we already showed a pop-up for
+
+    // "Taken" marks are saved in this browser, one set per day
+    function takenSet() { return JSON.parse(localStorage.getItem('taken-' + todayKey()) || '{}'); }
+    function doseKey(d) { return d.time + '|' + d.medicine; }
+    function markTaken(key) {
+      const t = takenSet();
+      t[key] = true;
+      localStorage.setItem('taken-' + todayKey(), JSON.stringify(t));
+      toast('Great! Dose marked as taken');
+      render();
+    }
+
+    function minutes(t) { const p = t.split(':'); return Number(p[0]) * 60 + Number(p[1]); }
+
+    function render() {
+      const now = new Date();
+      const midnight = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+      const nowMin = now.getHours() * 60 + now.getMinutes();
+      const taken = takenSet();
+      const doses = [];
+      let instructionsHtml = '';
+
+      for (const s of schedules) {
+        // Work out the last day of the course
+        const lastDay = new Date(s.start_date + 'T00:00:00');
+        lastDay.setDate(lastDay.getDate() + s.days - 1);
+        if (lastDay < midnight) continue; // course is finished
+        const daysLeft = Math.round((lastDay - midnight) / 86400000) + 1;
+        const done = s.days - daysLeft + 1;
+
+        for (const t of s.times.split(',')) {
+          doses.push({ time: t.trim(), medicine: s.medicine, dose: s.dose, food: s.food,
+            doctor: s.doctor || '-', hospital: s.hospital || '-' });
+        }
+
+        instructionsHtml += '<div class="card"><b style="font-size:17px">' + esc(s.medicine) + '</b> ' +
+          '<span class="badge info">' + esc(s.food) + '</span>' +
+          '<p>' + esc(s.dose) + ' at ' + esc(s.times) + '</p>' +
+          '<p class="muted">Doctor: ' + esc(s.doctor || '-') + ' | Hospital: ' + esc(s.hospital || '-') + '</p>' +
+          (s.notes ? '<p>' + esc(s.notes) + '</p>' : '') +
+          '<div class="progress"><i style="width:' + Math.min(100, Math.round(done / s.days * 100)) + '%"></i></div>' +
+          '<p class="muted">Day ' + Math.min(done, s.days) + ' of ' + s.days + ' &middot; ends on ' + lastDay.toDateString() + '</p></div>';
+      }
+
+      doses.sort(function (a, b) { return a.time.localeCompare(b.time); });
+
+      // Next dose that is not taken yet and not in the past
+      let next = null;
+      for (const d of doses) {
+        if (minutes(d.time) >= nowMin && !taken[doseKey(d)]) { next = d; break; }
+      }
+      if (next) {
+        const diff = minutes(next.time) - nowMin;
+        const left = diff === 0 ? 'now' : 'in ' + (diff >= 60 ? Math.floor(diff / 60) + 'h ' : '') + (diff % 60) + 'm';
+        document.getElementById('next').innerHTML = 'Next dose<div class="big">' + esc(next.time) + '</div>' +
+          esc(next.medicine) + ' - ' + esc(next.dose) + ' (' + esc(next.food) + ')<br><span class="count">' + left + '</span>';
+      } else {
+        document.getElementById('next').innerHTML = '<b style="font-size:20px">All done for today. Well done!</b>';
+      }
+
+      // Today's timings
+      let rows = '';
+      let doneCount = 0;
+      for (const d of doses) {
+        const key = doseKey(d);
+        let status;
+        if (taken[key]) { status = '<span class="badge ok">Taken</span>'; doneCount++; }
+        else if (minutes(d.time) < nowMin) status = '<span class="badge bad">Missed</span> <button class="small light" data-k="' + esc(key) + '">Mark taken</button>';
+        else status = '<button class="small" data-k="' + esc(key) + '">Mark taken</button>';
+        rows += '<tr><td><b>' + esc(d.time) + '</b></td><td>' + esc(d.medicine) + '</td><td>' + esc(d.dose) +
+          '</td><td>' + esc(d.food) + '</td><td>' + esc(d.doctor) + '</td><td>' + esc(d.hospital) + '</td><td>' + status + '</td></tr>';
+      }
+      document.getElementById('today').innerHTML = rows
+        ? '<table><tr><th>Time</th><th>Medicine</th><th>Dose</th><th>Food</th><th>Doctor</th><th>Hospital</th><th>Status</th></tr>' + rows + '</table>'
+        : '<p class="muted">No tablets scheduled. Your pharmacist adds timings when you buy a medicine.</p>';
+      document.getElementById('today').querySelectorAll('button[data-k]').forEach(function (b) {
+        b.onclick = function () { markTaken(b.dataset.k); };
+      });
+
+      document.getElementById('instructions').innerHTML = instructionsHtml || '<p class="muted">No active medicines.</p>';
+      document.getElementById('bar').style.width = (doses.length ? Math.round(doneCount / doses.length * 100) : 0) + '%';
+      document.getElementById('bar-text').textContent = doneCount + ' of ' + doses.length + ' doses taken';
+
+      // Pop-up reminder when a dose is due (within the last 15 minutes) and not taken
+      for (const d of doses) {
+        const diff = nowMin - minutes(d.time);
+        const key = todayKey() + doseKey(d);
+        if (diff >= 0 && diff <= 15 && !taken[doseKey(d)] && !reminded[key]) {
+          reminded[key] = true;
+          popup({ type: 'warn', title: 'Time for your tablet', message: d.medicine + ' - ' + d.dose + '\nTake: ' + d.food,
+            confirm: true, okText: 'I took it', cancelText: 'Later' })
+            .then(function (took) { if (took) markTaken(doseKey(d)); });
+          break;
+        }
+      }
+    }
+
+    // ----- My orders -----
+    const STEPS = ['Placed', 'Confirmed', 'Out for delivery', 'Delivered'];
+    async function loadOrders() {
+      const orders = await api('orders/mine');
+      let html = '';
+      for (const o of orders) {
+        const step = Math.max(0, STEPS.indexOf(o.status));
+        let lines = '';
+        for (const l of o.lines) {
+          lines += '<tr><td>' + esc(l.name) + '</td><td>' + l.qty + '</td><td>Rs ' + l.total + '</td></tr>';
+        }
+        let track = '<div class="track">';
+        let labels = '<div class="track-labels">';
+        STEPS.forEach(function (name, i) {
+          track += '<span class="' + (i <= step ? 'on' : '') + '"></span>';
+          labels += '<div>' + name + '</div>';
+        });
+        html += '<div class="card order"><div class="order-head"><b>Order #' + o.id + '</b>' +
+          '<span class="badge ' + (o.status === 'Delivered' ? 'ok' : 'info') + '">' + esc(o.status) + '</span></div>' +
+          '<p class="muted">' + esc(o.created_at) + '</p>' +
+          '<table><tr><th>Medicine</th><th>Qty</th><th>Price</th></tr>' + lines + '</table>' +
+          '<div class="total-line"><span>Total</span><span>Rs ' + o.total + '</span></div>' +
+          '<p class="ship">Deliver to: ' + esc(o.name) + ', ' + esc(o.address) + ', ' + esc(o.city) + ' - ' + esc(o.pincode) +
+          ' &middot; Phone ' + esc(o.phone) + '</p>' + track + '</div>' + labels + '</div>';
+      }
+      document.getElementById('my-orders').innerHTML = html || '<div class="card"><p class="muted">No orders yet. Order medicines from the Shop and they will show here.</p></div>';
+    }
+
+    async function loadDashboard() {
+      const data = await api('dashboard');
+      document.getElementById('p-avatar').textContent = data.user.name[0].toUpperCase();
+      document.getElementById('p-name').textContent = data.user.name;
+      document.getElementById('p-email').textContent = data.user.email;
+      document.getElementById('p-phone').textContent = data.user.phone || '';
+      schedules = data.schedules;
+      render();
+      loadOrders();
+      setInterval(render, 30000); // keeps the countdown and reminders fresh
+    }
+
+    loadDashboard();
+  </script>
+</body>
+</html>
